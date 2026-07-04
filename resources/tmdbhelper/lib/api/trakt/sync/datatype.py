@@ -36,6 +36,7 @@ class DataType(SyncDataParentProperties):
     lock_name = 'sync_trakt'
     key_prefix = None
     expiry_time = DEFAULT_EXPIRY
+    sync_page_limit = None
 
     def __init__(self, instance_syncdata, item_type):
         self.instance_syncdata = instance_syncdata
@@ -98,11 +99,27 @@ class DataType(SyncDataParentProperties):
         timestamp = self.cache.get_activity(self.item_type, self.method, set_timestamp(0, set_int=True))
         return self.last_activities.is_expired(timestamp, keys=self.last_activities_keys)
 
+    def get_response_sync_paged(self, *args, **kwargs):
+        limit = self.sync_page_limit
+        page = 1
+        items = []
+        while True:
+            data = self.get_response_sync(*args, page=page, limit=limit, **kwargs)
+            if data is None:
+                return None
+            if not data:
+                return items
+            items += data
+            page += 1
+
     @timerlock
     def sync_func(self):
         from tmdbhelper.lib.addon.logger import TimerFunc
         with TimerFunc(f'Sync: {self.__class__.__name__} get_response_sync {self.method} {self.item_type}', inline=True, log_threshold=0.001):
-            return self.get_response_sync('sync', self.method, f'{self.item_type}s', **self.sync_kwgs)
+            args = ('sync', self.method, f'{self.item_type}s')
+            if self.sync_page_limit:
+                return self.get_response_sync_paged(*args, **self.sync_kwgs)
+            return self.get_response_sync(*args, **self.sync_kwgs)
 
     @progress_bg
     def sync_data(self, **kwargs):
@@ -197,8 +214,14 @@ class SyncHiddenDropped(SyncHiddenProgressWatched):
 class SyncWatched(DataTypeEpisodes):
     keys = ('plays', 'last_watched_at', 'last_updated_at', 'aired_episodes', 'watched_episodes', 'reset_at', )
     last_activities_key = 'watched_at'
-    sync_kwgs = {'extended': 'full'}
     method = 'watched'
+    sync_page_limit = 100
+
+    @property
+    def sync_kwgs(self):
+        if self.item_type == 'show':
+            return {'extended': 'full,progress'}
+        return {'extended': 'full'}
 
 
 class SyncPlayback(DataTypeEpisodes):
